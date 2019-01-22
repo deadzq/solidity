@@ -687,7 +687,7 @@ string ABIFunctions::abiEncodingFunctionSimpleArray(
 					}
 					pos := tail
 					<assignEnd>
-				}oeu
+				}
 			)" :
 			R"(
 				// <readableTypeNameFrom> -> <readableTypeNameTo>
@@ -921,6 +921,7 @@ string ABIFunctions::abiEncodingFunctionStruct(
 
 	solUnimplementedAssert(!_from.dataStoredIn(DataLocation::CallData), "Encoding struct from calldata is not yet supported.");
 	solAssert(&_from.structDefinition() == &_to.structDefinition(), "");
+	solAssert(_options.padded, "Structs can only be encoded with padding.");
 
 	return createFunction(functionName, [&]() {
 		bool fromStorage = _from.location() == DataLocation::Storage;
@@ -945,7 +946,12 @@ string ABIFunctions::abiEncodingFunctionStruct(
 		templ("readableTypeNameFrom", _from.toString(true));
 		templ("readableTypeNameTo", _to.toString(true));
 		templ("return", dynamic ? " -> end " : "");
-		templ("assignEnd", dynamic ? "end := tail" : "");
+		if (dynamic && _options.dynamicInplace)
+			templ("assignEnd", "end := pos");
+		else if (dynamic && !_options.dynamicInplace)
+			templ("assignEnd", "end := tail");
+		else
+			templ("assignEnd", "");
 		// to avoid multiple loads from the same slot for subsequent members
 		templ("init", fromStorage ? "let slotValue := 0" : "");
 		u256 previousSlotOffset(-1);
@@ -995,24 +1001,45 @@ string ABIFunctions::abiEncodingFunctionStruct(
 				members.back()["retrieveValue"] = "mload(add(value, " + sourceOffset + "))";
 			}
 
-			Whiskers encodeTempl(
-				dynamicMember ?
-				string(R"(
-					mstore(add(pos, <encodingOffset>), sub(tail, pos))
-					tail := <abiEncode>(memberValue, tail)
-				)") :
-				string(R"(
-					<abiEncode>(memberValue, add(pos, <encodingOffset>))
-				)")
-			);
-			encodeTempl("encodingOffset", toCompactHexWithPrefix(encodingOffset));
-			encodingOffset += dynamicMember ? 0x20 : memberTypeTo->calldataEncodedSize();
-
 			EncodingOptions subOptions(_options);
 			subOptions.encodeFunctionFromStack = false;
-			encodeTempl("abiEncode", abiEncodingFunction(*memberTypeFrom, *memberTypeTo, subOptions));
+			string memberEncoder = abiEncodingFunction(*memberTypeFrom, *memberTypeTo, subOptions);
 
-			members.back()["encode"] = encodeTempl.render();
+			if (_options.dynamicInplace)
+			{
+				Whiskers encodeTempl(
+					dynamicMember ?
+					string(R"(
+						pos := <abiEncode>(memberValue, pos)
+					)") :
+					string(R"(
+						<abiEncode>(memberValue, pos)
+						pos := add(pos, <encodedSize>)
+					)")
+				);
+				// Padded size because struct members are always padded
+				encodeTempl("encodedSize", toCompactHexWithPrefix(memberTypeTo->calldataEncodedSize()));
+				encodeTempl("abiEncode", memberEncoder);
+				members.back()["encode"] = encodeTempl.render();
+			}
+			else
+			{
+				Whiskers encodeTempl(
+					dynamicMember ?
+					string(R"(
+						mstore(add(pos, <encodingOffset>), sub(tail, pos))
+						tail := <abiEncode>(memberValue, tail)
+					)") :
+					string(R"(
+						<abiEncode>(memberValue, add(pos, <encodingOffset>))
+					)")
+				);
+				encodeTempl("encodingOffset", toCompactHexWithPrefix(encodingOffset));
+				encodingOffset += dynamicMember ? 0x20 : memberTypeTo->calldataEncodedSize();
+				encodeTempl("abiEncode", memberEncoder);
+				members.back()["encode"] = encodeTempl.render();
+			}
+
 			members.back()["memberName"] = member.name;
 		}
 		templ("members", members);
@@ -1028,8 +1055,6 @@ string ABIFunctions::abiEncodingFunctionStringLiteral(
 )
 {
 	solAssert(_from.category() == Type::Category::StringLiteral, "");
-
-	solAssert(_options.dynamicInplace == !_options.padded, "In-place and non-padded can only be combined.");
 
 	string functionName =
 		"abi_encode_" +
@@ -1059,16 +1084,14 @@ string ABIFunctions::abiEncodingFunctionStringLiteral(
 			size_t words = (value.size() + 31) / 32;
 			size_t lengthSlotSize = _options.dynamicInplace ? 0 : 0x20;
 			if (_options.dynamicInplace)
-			{
 				templ("storeLength", "");
-				templ("overallSize", to_string(value.size()));
-			}
 			else
-			{
 				templ("storeLength", "mstore(pos, " + to_string(value.size()) + ")");
+			if (_options.padded)
 				templ("overallSize", to_string(lengthSlotSize + words * 32));
-			}
-			templ("length", to_string(value.size()));
+			else
+				templ("overallSize", to_string(lengthSlotSize + value.size()));
+
 			vector<map<string, string>> wordParams(words);
 			for (size_t i = 0; i < words; ++i)
 			{
