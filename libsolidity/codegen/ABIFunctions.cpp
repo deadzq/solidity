@@ -628,7 +628,7 @@ string ABIFunctions::abiEncodingFunctionCalldataArray(
 			function <functionName>(start, length, pos) -> end {
 				<storeLength> // might update pos
 				<copyFun>(start, pos, length)
-				end := add(pos, <roundedUpLength>)
+				end := add(pos, <lengthPadded>)
 			}
 		)");
 		if (_to.isDynamicallySized() && !_options.dynamicInplace)
@@ -639,7 +639,7 @@ string ABIFunctions::abiEncodingFunctionCalldataArray(
 		templ("readableTypeNameFrom", _from.toString(true));
 		templ("readableTypeNameTo", _to.toString(true));
 		templ("copyFun", copyToMemoryFunction(true));
-		templ("roundUpFun", _options.padded ? roundUpFunction() + "(length)" : "length");
+		templ("lengthPadded", _options.padded ? roundUpFunction() + "(length)" : "length");
 		return templ.render();
 	});
 }
@@ -771,14 +771,14 @@ string ABIFunctions::abiEncodingFunctionMemoryByteArray(
 				let length := <lengthFun>(value)
 				<storeLength> // might update pos
 				<copyFun>(add(value, 0x20), pos, length)
-				end := add(pos, <lengthRoundedUp>)
+				end := add(pos, <lengthPadded>)
 			}
 		)");
 		templ("functionName", functionName);
 		templ("lengthFun", arrayLengthFunction(_from));
 		templ("storeLength", _options.dynamicInplace ? "" : "mstore(pos, length) pos := add(pos, 0x20)");
 		templ("copyFun", copyToMemoryFunction(false));
-		templ("lengthRoundedUp", _options.padded ? roundUpFunction() + "(length)" : "length");
+		templ("lengthPadded", _options.padded ? roundUpFunction() + "(length)" : "length");
 		return templ.render();
 	});
 }
@@ -814,7 +814,7 @@ string ABIFunctions::abiEncodingFunctionCompactStorageArray(
 						let length := and(div(slotValue, 2), 0x7f)
 						<storeLength> // might update pos
 						mstore(pos, and(slotValue, not(0xff)))
-						ret := add(pos, <lengthRoundedUpShort>)
+						ret := add(pos, <lengthPaddedShort>)
 					}
 					case 1 {
 						// long byte array
@@ -826,16 +826,16 @@ string ABIFunctions::abiEncodingFunctionCompactStorageArray(
 							mstore(add(pos, i), sload(dataPos))
 							dataPos := add(dataPos, 1)
 						}
-						ret := add(pos, <lengthRoundedUpLong>)
+						ret := add(pos, <lengthPaddedLong>)
 					}
 				}
 			)");
 			templ("functionName", functionName);
 			templ("readableTypeNameFrom", _from.toString(true));
 			templ("readableTypeNameTo", _to.toString(true));
-			templ("storeLength", _options.dynamicInplace ? "" : "mstore(pos, length)) pos := add(pos, 0x20)");
-			templ("lengthRoundedUpShort", _options.padded ? "0x20" : "length");
-			templ("lengthRoundedUpLong", _options.padded ? "i" : "length");
+			templ("storeLength", _options.dynamicInplace ? "" : "mstore(pos, length) pos := add(pos, 0x20)");
+			templ("lengthPaddedShort", _options.padded ? "0x20" : "length");
+			templ("lengthPaddedLong", _options.padded ? "i" : "length");
 			templ("arrayDataSlot", arrayDataAreaFunction(_from));
 			return templ.render();
 		}
